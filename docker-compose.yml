@@ -1,0 +1,12 @@
+version: "3"
+services:
+  telegram-monitor:
+    build: .
+    environment:
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - PHONE_NUMBER=${PHONE_NUMBER}
+      - USER_IDS=${USER_IDS}
+    volumes:
+      - ./data:/app/data
+      - ./reports:/app/reports
