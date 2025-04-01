@@ -1,155 +1,118 @@
+import os
 import asyncio
 import json
-import os
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+from art import tprint
+from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.tl.types import UserStatusOnline, UserStatusOffline
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from dotenv import load_dotenv
 
 load_dotenv()
 
-API_ID = int(os.getenv('API_ID'))
-API_HASH = os.getenv('API_HASH')
-PHONE_NUMBER = os.getenv('PHONE_NUMBER')
-USER_IDS = list(map(int, os.getenv('USER_IDS').split(',')))
-SESSION_NAME = os.getenv('SESSION_NAME', 'session')
-DATA_DIR = '/app/data'
-REPORTS_DIR = '/app/reports'
+tprint("online-spy")
 
-os.makedirs(DATA_DIR, exist_ok=True)
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+APP_NAME = os.getenv("APP_NAME")
+USERNAMES = list(map(str.strip, os.getenv("USERNAMES").split(",")))
+CHECK_INTERVAL = 45
+
+# Файлы данных
+SESSIONS_FILE = "data/sessions.json"
+REPORTS_DIR = "data/daily_reports"
 os.makedirs(REPORTS_DIR, exist_ok=True)
+os.makedirs("data", exist_ok=True)
 
-client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-user_data = {}
+client = TelegramClient(APP_NAME, API_ID, API_HASH)
 
-def load_user_data():
-    global user_data
-    try:
-        with open(os.path.join(DATA_DIR, 'user_data.json'), 'r') as f:
-            data = json.load(f)
-            for uid, udata in data.items():
-                user_data[uid] = {
-                    'current_session_start': datetime.fromisoformat(udata['current_session_start']) if udata['current_session_start'] else None,
-                    'sessions': [{
-                        'start': datetime.fromisoformat(s['start']),
-                        'end': datetime.fromisoformat(s['end']),
-                        'duration': s['duration']
-                    } for s in udata['sessions']],
-                    'total_time': udata['total_time']
-                }
-    except FileNotFoundError:
-        pass
+# Загружаем сессии из файла
+def load_sessions():
+    if os.path.exists(SESSIONS_FILE):
+        with open(SESSIONS_FILE, "r") as f:
+            return json.load(f)
+    return defaultdict(dict)
 
-def save_user_data():
-    data_to_save = {}
-    for uid, udata in user_data.items():
-        data_to_save[uid] = {
-            'current_session_start': udata['current_session_start'].isoformat() if udata['current_session_start'] else None,
-            'sessions': [{
-                'start': s['start'].isoformat(),
-                'end': s['end'].isoformat(),
-                'duration': s['duration']
-            } for s in udata['sessions']],
-            'total_time': udata['total_time']
-        }
-    with open(os.path.join(DATA_DIR, 'user_data.json'), 'w') as f:
-        json.dump(data_to_save, f)
+# Сохраняем сессии
+def save_sessions(sessions):
+    with open(SESSIONS_FILE, "w") as f:
+        json.dump(sessions, f, indent=2)
 
-async def check_statuses():
-    for user_id in USER_IDS:
-        try:
-            user = await client.get_entity(user_id)
-            user_id_str = str(user.id)
-            current_status = user.status
-            
-            if user_id_str not in user_data:
-                user_data[user_id_str] = {
-                    'current_session_start': None,
-                    'sessions': [],
-                    'total_time': 0
-                }
-            
+# Расчет времени активности и генерация отчета
+def generate_daily_report(sessions, date_str):
+    report = []
+    for username, data in sessions.items():
+        daily_sessions = data.get(date_str, [])
+        session_count = len(daily_sessions)
+        total_online = timedelta()
+        session_lines = []
+
+        for sess in daily_sessions:
+            start = datetime.fromisoformat(sess["start"])
+            end = datetime.fromisoformat(sess["end"])
+            duration = end - start
+            total_online += duration
+            session_lines.append(f"  - {start.strftime('%H:%M:%S')} → {end.strftime('%H:%M:%S')} ({str(duration)})")
+
+        report.append(
+            f"👤 {username}\n"
+            f"  Сессий: {session_count}\n"
+            f"  Суммарно онлайн: {str(total_online)}\n"
+            + "\n".join(session_lines) + "\n"
+        )
+
+    filename = os.path.join(REPORTS_DIR, f"{date_str}.txt")
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write("\n".join(report))
+    print(f"[✔] Ежедневный отчет сохранен: {filename}")
+
+async def monitor():
+    sessions = load_sessions()
+    last_statuses = {}
+
+    async with client:
+        while True:
             now = datetime.now()
-            udata = user_data[user_id_str]
-            
-            if isinstance(current_status, UserStatusOnline):
-                if not udata['current_session_start']:
-                    udata['current_session_start'] = now
-            else:
-                if udata['current_session_start']:
-                    start_time = udata['current_session_start']
-                    duration = (now - start_time).total_seconds()
-                    udata['sessions'].append({
-                        'start': start_time,
-                        'end': now,
-                        'duration': duration
-                    })
-                    udata['total_time'] += duration
-                    udata['current_session_start'] = None
-                    save_user_data()
-        except Exception as e:
-            print(f'Error checking user {user_id}: {str(e)}')
+            date_str = now.strftime("%Y-%m-%d")
+            for username in USERNAMES:
+                try:
+                    user = await client.get_entity(username)
+                    status = user.status
+                    is_online = isinstance(status, UserStatusOnline)
 
-async def generate_daily_report():
-    yesterday = date.today() - timedelta(days=1)
-    report = f"Отчет за {yesterday.strftime('%Y-%m-%d')}\n\n"
-    
-    for user_id in USER_IDS:
-        user_id_str = str(user_id)
-        if user_id_str not in user_data:
-            continue
-        
-        udata = user_data[user_id_str]
-        sessions = [s for s in udata['sessions'] if s['start'].date() == yesterday]
-        total_duration = sum(s['duration'] for s in sessions)
-        
-        report += f"Пользователь: {user_id}\n"
-        report += f"Сессий: {len(sessions)}\n"
-        report += f"Общее время: {timedelta(seconds=int(total_duration))}\n"
-        report += "Детализация сессий:\n"
-        for i, session in enumerate(sessions, 1):
-            start = session['start'].strftime('%H:%M:%S')
-            end = session['end'].strftime('%H:%M:%S')
-            report += f"{i}. {start} - {end} ({timedelta(seconds=int(session['duration']))})\n"
-        report += "\n"
-    
-    filename = os.path.join(REPORTS_DIR, f"{yesterday.strftime('%Y-%m-%d')}.txt")
-    with open(filename, 'w') as f:
-        f.write(report)
-    print(f"Сгенерирован отчет за {yesterday.strftime('%Y-%m-%d')}")
+                    # Предыдущее состояние
+                    was_online = last_statuses.get(username, False)
 
-async def main():
-    await client.start(PHONE_NUMBER)
-    load_user_data()
-    
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(generate_daily_report, 'cron', hour=0, minute=5)
-    scheduler.start()
-    
-    while True:
-        await check_statuses()
-        await asyncio.sleep(30)
+                    # Детектируем изменение
+                    if is_online and not was_online:
+                        # Начало сессии
+                        print(f"[{now}] {username} зашел онлайн")
+                        sessions.setdefault(username, {}).setdefault(date_str, []).append({
+                            "start": now.isoformat(),
+                            "end": now.isoformat()  # временно, обновится позже
+                        })
 
-async def shutdown():
-    for user_id in USER_IDS:
-        user_id_str = str(user_id)
-        if user_id_str in user_data and user_data[user_id_str]['current_session_start']:
-            now = datetime.now()
-            udata = user_data[user_id_str]
-            duration = (now - udata['current_session_start']).total_seconds()
-            udata['sessions'].append({
-                'start': udata['current_session_start'],
-                'end': now,
-                'duration': duration
-            })
-            udata['total_time'] += duration
-            udata['current_session_start'] = None
-    save_user_data()
-    await client.disconnect()
+                    elif not is_online and was_online:
+                        print(f"[{now}] {username} вышел")
+                        # Завершаем последнюю сессию
+                        if sessions.get(username, {}).get(date_str):
+                            sessions[username][date_str][-1]["end"] = now.isoformat()
 
-if __name__ == '__main__':
-    try:
-        client.loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        client.loop.run_until_complete(shutdown())
+                    last_statuses[username] = is_online
+
+                except Exception as e:
+                    print(f"[!] Ошибка при проверке {username}: {e}")
+
+            # Сохраняем прогресс
+            save_sessions(sessions)
+
+            # Генерация отчета в полночь
+            if now.hour == 0 and now.minute < (CHECK_INTERVAL // 60):
+                generate_daily_report(sessions, (now - timedelta(days=1)).strftime("%Y-%m-%d"))
+
+            await asyncio.sleep(CHECK_INTERVAL)
+
+if __name__ == "__main__":
+
+    asyncio.run(monitor())
