@@ -1,3 +1,5 @@
 .env
 *.session
 venv
+.idea
+data/sessions.json
