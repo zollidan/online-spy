@@ -2,14 +2,19 @@ import os
 import asyncio
 import json
 from datetime import datetime, timedelta
-from collections import defaultdict
+import random
+import traceback
 
 from art import tprint
 from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.tl.types import UserStatusOnline, UserStatusOffline
 
-load_dotenv()
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import Column, Integer, String, Date, DateTime
+
+load_dotenv(override=True)
 
 tprint("online-spy")
 
@@ -17,102 +22,77 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 APP_NAME = os.getenv("APP_NAME")
 USERNAMES = list(map(str.strip, os.getenv("USERNAMES").split(",")))
-CHECK_INTERVAL = 45
 
-# Файлы данных
-SESSIONS_FILE = "data/sessions.json"
-REPORTS_DIR = "data/daily_reports"
-os.makedirs(REPORTS_DIR, exist_ok=True)
-os.makedirs("data", exist_ok=True)
+DATABASE_USER = os.getenv("DATABASE_USER")
+DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD")
+DATABASE_NAME = os.getenv("DATABASE_NAME")
+
+DATABASE_URL = f"postgresql+asyncpg://{DATABASE_USER}:{DATABASE_PASSWORD}@localhost/{DATABASE_NAME}"
+
+Base = declarative_base()
+engine = create_async_engine(DATABASE_URL, echo=False)
+AsyncSessionLocal = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+class SessionRecord(Base):
+    __tablename__ = "sessions"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, nullable=False)
+    session_date = Column(Date, nullable=False)
+    start_time = Column(DateTime, nullable=False)
+    end_time = Column(DateTime, nullable=False)
 
 client = TelegramClient(APP_NAME, API_ID, API_HASH)
 
-# Загружаем сессии из файла
-def load_sessions():
-    if os.path.exists(SESSIONS_FILE):
-        with open(SESSIONS_FILE, "r") as f:
-            return json.load(f)
-    return defaultdict(dict)
+db_lock = asyncio.Lock()
 
-# Сохраняем сессии
-def save_sessions(sessions):
-    with open(SESSIONS_FILE, "w") as f:
-        json.dump(sessions, f, indent=2)
+async def save_session_record(username: str, start: datetime, end: datetime):
+    async with db_lock:
+        async with AsyncSessionLocal() as session:
+            async with session.begin():
+                new_record = SessionRecord(
+                    username=username,
+                    session_date=start.date(),
+                    start_time=start,
+                    end_time=end
+                )
+                session.add(new_record)
+                print(f"Запись для {username} успешно сохранена")
 
-# Расчет времени активности и генерация отчета
-def generate_daily_report(sessions, date_str):
-    report = []
-    for username, data in sessions.items():
-        daily_sessions = data.get(date_str, [])
-        session_count = len(daily_sessions)
-        total_online = timedelta()
-        session_lines = []
-
-        for sess in daily_sessions:
-            start = datetime.fromisoformat(sess["start"])
-            end = datetime.fromisoformat(sess["end"])
-            duration = end - start
-            total_online += duration
-            session_lines.append(f"  - {start.strftime('%H:%M:%S')} → {end.strftime('%H:%M:%S')} ({str(duration)})")
-
-        report.append(
-            f"👤 {username}\n"
-            f"  Сессий: {session_count}\n"
-            f"  Суммарно онлайн: {str(total_online)}\n"
-            + "\n".join(session_lines) + "\n"
-        )
-
-    filename = os.path.join(REPORTS_DIR, f"{date_str}.txt")
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("\n".join(report))
-    print(f"[✔] Ежедневный отчет сохранен: {filename}")
+active_sessions = {}
 
 async def monitor():
-    sessions = load_sessions()
-    last_statuses = {}
-
     async with client:
         while True:
             now = datetime.now()
-            date_str = now.strftime("%Y-%m-%d")
             for username in USERNAMES:
                 try:
                     user = await client.get_entity(username)
                     status = user.status
-                    is_online = isinstance(status, UserStatusOnline)
-
-                    # Предыдущее состояние
-                    was_online = last_statuses.get(username, False)
-
-                    # Детектируем изменение
-                    if is_online and not was_online:
-                        # Начало сессии
-                        print(f"[{now}] {username} зашел онлайн")
-                        sessions.setdefault(username, {}).setdefault(date_str, []).append({
-                            "start": now.isoformat(),
-                            "end": now.isoformat()  # временно, обновится позже
-                        })
-
-                    elif not is_online and was_online:
-                        print(f"[{now}] {username} вышел")
-                        # Завершаем последнюю сессию
-                        if sessions.get(username, {}).get(date_str):
-                            sessions[username][date_str][-1]["end"] = now.isoformat()
-
-                    last_statuses[username] = is_online
-
+                    
+                    if isinstance(status, UserStatusOnline):
+                        if username not in active_sessions:
+                            active_sessions[username] = now
+                            print(f"[+] {username} онлайн: сессия начата в {now}")
+                    elif isinstance(status, UserStatusOffline):
+                        if username in active_sessions:
+                   
+                            start_time = active_sessions[username]                            
+                            await save_session_record(username, start=start_time, end=now)
+                            print(f"[-] {username} оффлайн: сессия с {start_time} по {now} сохранена")
+                            del active_sessions[username]
+            
+                            
+                    print(active_sessions)
                 except Exception as e:
-                    print(f"[!] Ошибка при проверке {username}: {e}")
+                    print(f"[!!!] Ошибка при проверке {username}: {e}")
 
-            # Сохраняем прогресс
-            save_sessions(sessions)
+            await asyncio.sleep(3)
 
-            # Генерация отчета в полночь
-            if now.hour == 0 and now.minute < (CHECK_INTERVAL // 60):
-                generate_daily_report(sessions, (now - timedelta(days=1)).strftime("%Y-%m-%d"))
-
-            await asyncio.sleep(CHECK_INTERVAL)
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 if __name__ == "__main__":
-
+    asyncio.run(init_db())
     asyncio.run(monitor())

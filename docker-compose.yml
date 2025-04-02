@@ -1,12 +1,18 @@
-version: "3"
+version: "3.9"
+
 services:
-  telegram-monitor:
-    build: .
+  postgres:
+    image: postgres:15
+    container_name: tracker-postgres
+    restart: always
     environment:
-      - API_ID=${API_ID}
-      - API_HASH=${API_HASH}
-      - PHONE_NUMBER=${PHONE_NUMBER}
-      - USER_IDS=${USER_IDS}
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      POSTGRES_DB: ${DATABASE_NAME}
     volumes:
-      - ./data:/app/data
-      - ./reports:/app/reports
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
