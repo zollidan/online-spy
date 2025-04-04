@@ -3,3 +3,5 @@
 venv
 .idea
 data/sessions.json
+.pytest_cache
+__pycache__
