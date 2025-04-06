@@ -1,11 +1,17 @@
 version: "3.9"
 
 services:
+  # online-spy:
+  #   build: .
+  #   container_name: online-spy
+  #   restart: always
+
   postgres:
     image: postgres:15
     container_name: tracker-postgres
     restart: always
     environment:
+      POSTGRES_HOST: ${DATABASE_HOST}
       POSTGRES_USER: ${DATABASE_USER}
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
       POSTGRES_DB: ${DATABASE_NAME}

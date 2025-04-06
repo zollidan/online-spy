@@ -2,6 +2,7 @@ import os
 import asyncio
 import json
 from datetime import datetime, timedelta
+import platform
 import random
 import traceback
 
@@ -23,14 +24,16 @@ API_HASH = os.getenv("API_HASH")
 APP_NAME = os.getenv("APP_NAME")
 USERNAMES = list(map(str.strip, os.getenv("USERNAMES").split(",")))
 
+DATABASE_HOST = os.getenv("DATABASE_HOST")
 DATABASE_USER = os.getenv("DATABASE_USER")
 DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
+DAILY_REPORT_CHANNEL_ID = int(os.getenv("DAILY_REPORT_CHANNEL_ID"))
 
 CHAT_ID = os.getenv("CHAT_ID")
 
 DATABASE_URL = f"postgresql+asyncpg://{DATABASE_USER}:{DATABASE_PASSWORD}@localhost/{DATABASE_NAME}"
-DEBUG = False
+DEBUG = True
 
 Base = declarative_base()
 engine = create_async_engine(DATABASE_URL, echo=False)
@@ -98,7 +101,7 @@ async def monitor():
                 except Exception as e:
                     print(f"[!!!] Ошибка при проверке {username}: {e}")
 
-            await asyncio.sleep(random.randint(30, 60))
+            await asyncio.sleep(5) # random.randint(30, 60)
             
 from sqlalchemy import select, func
 from collections import defaultdict
@@ -107,10 +110,11 @@ async def generate_daily_report():
     async with AsyncSessionLocal() as session:
         async with session.begin():
             today = datetime.now().date()
-            if DEBUG:
-                since = datetime.now() - timedelta(minutes=2)
-            else:
-                since = datetime.combine(today, datetime.min.time())
+            since = datetime.combine(today, datetime.min.time())
+
+            # 👇 Выбираем формат дня для даты отчёта
+            day_format = '%-d' if platform.system() != 'Windows' else '%#d'
+            date_str = today.strftime(f'{day_format} %B').lower()
 
             stmt = select(SessionRecord).where(SessionRecord.start_time >= since)
             result = await session.execute(stmt)
@@ -121,27 +125,42 @@ async def generate_daily_report():
                 duration = record.end_time - record.start_time
                 user_data[record.username].append((record.start_time, record.end_time, duration))
 
-            report_lines = ["📊 Отчет по активности:"]
+            reports = []
             for username, sessions in user_data.items():
                 total_sessions = len(sessions)
                 total_duration = sum((s[2] for s in sessions), timedelta())
-                report_lines.append(f"\n👤 @{username}")
-                report_lines.append(f"— Всего сессий: {total_sessions}")
-                report_lines.append(f"— Общее время онлайн: {str(total_duration)}")
-                for i, (start, end, dur) in enumerate(sessions, 1):
-                    report_lines.append(f"  {i}) {start.strftime('%H:%M:%S')} – {end.strftime('%H:%M:%S')} ({str(dur)})")
 
-            return "\n".join(report_lines)
+                time_ranges = "\n".join(
+                    f"{start.strftime('%H:%M')} – {end.strftime('%H:%M')}"
+                    for start, end, _ in sessions
+                )
+
+                total_hours, remainder = divmod(total_duration.seconds, 3600)
+                total_minutes = remainder // 60
+                total_time_str = f"{total_hours} час" + ("" if total_hours == 1 else "а") + f", {total_minutes} мин"
+
+                report = (
+                    f"👤 {username} • {date_str}\n\n"
+                    f"Зашел/вышел:\n{time_ranges}\n\n"
+                    f"Всего сессий: {total_sessions}.\n"
+                    f"Общее время онлайн: {total_time_str}."
+                )
+                reports.append(report)
+
+            return reports
 
             
 async def report_scheduler():
     await client.connect()
     while True:
         try:
-            report = await generate_daily_report()
+            reports = await generate_daily_report()
             if DEBUG:
-                print("Отправка тестового отчета...")
-            await client.send_message('me', report)  # или ID/username чата
+                print("Отправка отчётов по пользователям...")
+
+            for report in reports:
+                await client.send_message(DAILY_REPORT_CHANNEL_ID, report) 
+                await asyncio.sleep(1) 
 
         except Exception as e:
             print(f"Ошибка при создании или отправке отчета: {e}")
