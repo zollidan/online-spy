@@ -1,10 +1,12 @@
 version: "3.9"
 
 services:
-  # online-spy:
-  #   build: .
-  #   container_name: online-spy
-  #   restart: always
+  online-spy:
+    build: .
+    container_name: online-spy
+    restart: always
+    networks:
+      - network1
 
   postgres:
     image: postgres:15
@@ -20,5 +22,12 @@ services:
     ports:
       - "5432:5432"
 
+    networks:
+      - network1
+
 volumes:
   postgres_data:
+
+networks:
+  network1:
+    name: my-pre-existing-network

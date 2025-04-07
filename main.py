@@ -41,8 +41,11 @@ DAILY_REPORT_CHANNEL_ID = int(os.getenv("DAILY_REPORT_CHANNEL_ID"))
 
 CHAT_ID = os.getenv("CHAT_ID")
 
-DATABASE_URL = f"postgresql+asyncpg://{DATABASE_USER}:{DATABASE_PASSWORD}@localhost/{DATABASE_NAME}"
-DEBUG = True
+DATABASE_URL = f"postgresql+asyncpg://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}/{DATABASE_NAME}"
+DEBUG = False
+if DEBUG:
+    print(f"DEBUG: {DEBUG}")
+    print(f"DATABASE_URL: {DATABASE_URL}")
 
 active_sessions = {}
 
@@ -175,7 +178,10 @@ async def monitor():
                 except Exception as e:
                     print(f"[!!!] Ошибка при проверке {username}: {e}")
 
-            await asyncio.sleep(random.randint(30, 60))
+            if datetime.now().strftime("%H:%M") == "23:59":
+                await report_scheduler()
+            
+            await asyncio.sleep(30)
         
 async def generate_daily_report():
     async with AsyncSessionLocal() as session:
@@ -241,40 +247,36 @@ async def generate_daily_report():
             return reports
 
 async def report_scheduler():
-    while True:
-        try:
-            reports = await generate_daily_report()
-            if DEBUG:
-                print("отправка отчета")
+    try:
+        reports = await generate_daily_report()
+        if DEBUG:
+            print("отправка отчета")
+        
+        for report in reports:
+            # Extract username from the report text
+            # Assuming the report format is "👤 username • date"
+            username = report.split(' ')[1]
             
-            for report in reports:
-                # Extract username from the report text
-                # Assuming the report format is "👤 username • date"
-                username = report.split(' ')[1]
+            async with AsyncSessionLocal() as session:
                 
-                async with AsyncSessionLocal() as session:
-                    
-                    stmt = select(TrackedUser).where(TrackedUser.username == username)
-                    result = await session.execute(stmt)
-                    user = result.scalars().first()  # Get the first result
-                                       
-                    if user and user.topic_id:
-    
-                        await bot.send_message(chat_id=int(user.chat_id), text=report, message_thread_id=int(user.topic_id))
-                        if DEBUG:
-                            print(f"Отправлен отчет для {username} в чат {user.topic_id}")
-                    else:
-                        if DEBUG:
-                            print(f"Не удалось найти topic_id для пользователя {username}")
-                
-                await asyncio.sleep(1)
+                stmt = select(TrackedUser).where(TrackedUser.username == username)
+                result = await session.execute(stmt)
+                user = result.scalars().first()  # Get the first result
+                                    
+                if user and user.topic_id:
 
-        except Exception as e:
-            print(f"Ошибка при создании или отправке отчета: {e}")
-            traceback.print_exc()
+                    await bot.send_message(chat_id=int(user.chat_id), text=report, message_thread_id=int(user.topic_id))
+                    if DEBUG:
+                        print(f"Отправлен отчет для {username} в чат {user.topic_id}")
+                else:
+                    if DEBUG:
+                        print(f"Не удалось найти topic_id для пользователя {username}")
+            
+            await asyncio.sleep(1)
 
-        wait_time = 2400 if DEBUG else 86400  # 2 минуты или сутки
-        await asyncio.sleep(wait_time)
+    except Exception as e:
+        print(f"Ошибка при создании или отправке отчета: {e}")
+        traceback.print_exc()
 
 async def init_db():
     async with engine.begin() as conn:
