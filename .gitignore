@@ -2,7 +2,7 @@
 *.session
 venv
 .idea
-data/sessions.json
+sessions
 .pytest_cache
 __pycache__
 main_test.py

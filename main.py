@@ -1,6 +1,6 @@
 import os
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import traceback
 
 from art import tprint
@@ -25,21 +25,22 @@ load_dotenv(override=True)
 
 tprint("online-spy")
 
-ADMINS = [int(os.getenv("ADMINS"))]
+ADMINS = [int(x) for x in os.getenv("ADMINS", "").split(",") if x.strip()]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 APP_NAME = os.getenv("APP_NAME")
+TIMEZONE = timezone("Europe/Moscow")
 
-DATABASE_HOST = os.getenv("DATABASE_HOST")
-DATABASE_USER = os.getenv("DATABASE_USER")
-DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD")
-DATABASE_NAME = os.getenv("DATABASE_NAME")
+DATABASE_HOST = os.getenv("POSTGRES_HOST")
+DATABASE_USER = os.getenv("POSTGRES_USER")
+DATABASE_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+DATABASE_NAME = os.getenv("POSTGRES_DB")
 
 CHAT_ID = os.getenv("CHAT_ID")
 
 DATABASE_URL = f"postgresql+asyncpg://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}/{DATABASE_NAME}"
-DEBUG = False
+DEBUG = True
 if DEBUG:
     print(f"DEBUG: {DEBUG}")
     print(f"DATABASE_URL: {DATABASE_URL}")
@@ -79,7 +80,11 @@ async def add_user(message: Message):
         await message.answer(text="У вас нет прав на выполнение этой команды.")
         return
     
-    username = message.text.split(' ')[1]
+    try:
+        username = message.text.split(' ')[1]
+    except IndexError as e:
+        await message.answer(text="Id пользователя не найден в вашем сообщении.")
+        return
     chat_id = message.chat.id
     topic_id = message.message_thread_id
     
@@ -94,10 +99,13 @@ async def delete_user(message: Message):
         await message.answer(text="У вас нет прав на выполнение этой команды.")
         return
     
-    username = message.text.split(' ')[1]
+    try:
+        username = message.text.split(' ')[1]
+    except IndexError as e:
+        await message.answer(text="Id пользователя не найден в вашем сообщении.")
+        return
     
     await remove_tracked_user(username=username)
-    
     
     await message.answer(text=f"Пользователь {username} больше не отслеживается.")
 
@@ -158,7 +166,7 @@ async def get_tracked_usernames():
 async def monitor():
     async with client:
         while True:
-            now = datetime.now()
+            now = datetime.now(tz=TIMEZONE)
             usernames = await get_tracked_usernames()
             for username in usernames:
                 try:
@@ -184,7 +192,7 @@ async def monitor():
                 except Exception as e:
                     print(f"[!!!] Ошибка при проверке {username}: {e}")
 
-            if datetime.now().strftime("%H:%M") == "23:59":
+            if datetime.now(tz=TIMEZONE).strftime("%H:%M") == "23:59":
                 await report_scheduler()
             
             await asyncio.sleep(30)
@@ -192,7 +200,7 @@ async def monitor():
 async def generate_daily_report():
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            today = datetime.now().date()
+            today = datetime.now(tz=TIMEZONE).date()
             since = datetime.combine(today, datetime.min.time())
             
             month_names_ru = {
@@ -299,7 +307,7 @@ async def main():
         )
        
     finally:
-        now = datetime.now()
+        now = datetime.now(tz=TIMEZONE)
         for username, start_time in active_sessions.items():
             await save_session_record(username, start=start_time, end=now)
             if DEBUG:
