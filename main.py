@@ -82,7 +82,7 @@ async def add_user(message: Message):
     
     try:
         username = message.text.split(' ')[1]
-    except IndexError as e:
+    except IndexError:
         await message.answer(text="Id пользователя не найден в вашем сообщении.")
         return
     chat_id = message.chat.id
@@ -101,7 +101,7 @@ async def delete_user(message: Message):
     
     try:
         username = message.text.split(' ')[1]
-    except IndexError as e:
+    except IndexError:
         await message.answer(text="Id пользователя не найден в вашем сообщении.")
         return
     
