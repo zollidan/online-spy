@@ -66,7 +66,7 @@ class TrackedUser(Base):
     chat_id = Column(String, nullable=False)
     topic_id = Column(String, nullable=False)
     
-client = TelegramClient(APP_NAME, API_ID, API_HASH)
+client = TelegramClient(f"sessions/{APP_NAME}", API_ID, API_HASH)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
