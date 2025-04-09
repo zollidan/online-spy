@@ -1,16 +1,16 @@
 version: "3.9"
 
 services:
-  online-spy:
-    build: .
-    container_name: online-spy
-    restart: always
-    networks:
-      - network1
+  # online-spy:
+  #   build: .
+  #   container_name: online-spy
+  #   restart: always
+  #   networks:
+  #     - network1
 
   postgres:
     image: postgres:15
-    container_name: tracker-postgres
+    container_name: online-spy-postgres
     restart: always
     environment:
       POSTGRES_HOST: ${DATABASE_HOST}
@@ -22,12 +22,11 @@ services:
     ports:
       - "5432:5432"
 
-    networks:
-      - network1
+    # networks:
+    #   - network1
 
 volumes:
   postgres_data:
-
-networks:
-  network1:
-    name: my-pre-existing-network
+# networks:
+#   network1:
+#     name: my-network

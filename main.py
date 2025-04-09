@@ -1,9 +1,6 @@
 import os
 import asyncio
-import json
 from datetime import datetime, timedelta
-import platform
-import random
 import traceback
 
 from art import tprint
@@ -21,13 +18,14 @@ from telethon.tl.types import UserStatusOnline, UserStatusOffline
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, Integer, String, Date, DateTime
-from sqlalchemy import select, func
+from sqlalchemy import select
 from collections import defaultdict
 
 load_dotenv(override=True)
 
 tprint("online-spy")
 
+ADMINS = [int(os.getenv("ADMINS"))]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
@@ -37,7 +35,6 @@ DATABASE_HOST = os.getenv("DATABASE_HOST")
 DATABASE_USER = os.getenv("DATABASE_USER")
 DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
-DAILY_REPORT_CHANNEL_ID = int(os.getenv("DAILY_REPORT_CHANNEL_ID"))
 
 CHAT_ID = os.getenv("CHAT_ID")
 
@@ -78,6 +75,10 @@ db_lock = asyncio.Lock()
 @dp.message(F.text.startswith('/on'))
 async def add_user(message: Message):
     
+    if message.from_user.id not in ADMINS:
+        await message.answer(text="У вас нет прав на выполнение этой команды.")
+        return
+    
     username = message.text.split(' ')[1]
     chat_id = message.chat.id
     topic_id = message.message_thread_id
@@ -87,11 +88,16 @@ async def add_user(message: Message):
     await message.answer(text=f"Пользователь {username} теперь отслеживается.")
     
 @dp.message(F.text.startswith('/off'))
-async def add_user(message: Message):
+async def delete_user(message: Message):
+
+    if message.from_user.id not in ADMINS:
+        await message.answer(text="У вас нет прав на выполнение этой команды.")
+        return
     
     username = message.text.split(' ')[1]
     
     await remove_tracked_user(username=username)
+    
     
     await message.answer(text=f"Пользователь {username} больше не отслеживается.")
 
@@ -288,7 +294,6 @@ async def main():
 
         await asyncio.gather(
             dp.start_polling(bot),
-            client.start(),
             monitor(),
             report_scheduler()
         )

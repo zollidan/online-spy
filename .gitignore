@@ -5,3 +5,4 @@ venv
 data/sessions.json
 .pytest_cache
 __pycache__
+main_test.py
