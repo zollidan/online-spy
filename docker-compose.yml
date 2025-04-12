@@ -11,6 +11,8 @@ services:
       - ./sessions:/app/sessions
     networks:
       - network1
+    depends_on:
+      - postgres
 
   postgres:
     image: postgres:15

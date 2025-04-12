@@ -6,3 +6,4 @@ sessions
 .pytest_cache
 __pycache__
 main_test.py
+logs/app.log

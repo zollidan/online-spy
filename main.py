@@ -1,6 +1,7 @@
 import os
 import asyncio
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import traceback
 
 from art import tprint
@@ -17,20 +18,22 @@ from telethon.tl.types import UserStatusOnline, UserStatusOffline
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import Column, Integer, String, Date, DateTime
+from sqlalchemy import TIMESTAMP, Column, Integer, String, Date, DateTime
 from sqlalchemy import select
 from collections import defaultdict
 
+import logging
 load_dotenv(override=True)
 
 tprint("online-spy")
+
 
 ADMINS = [int(x) for x in os.getenv("ADMINS", "").split(",") if x.strip()]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 APP_NAME = os.getenv("APP_NAME")
-TIMEZONE = timezone("Europe/Moscow")
+TIMEZONE = timezone(timedelta(hours=3))
 
 DATABASE_HOST = os.getenv("POSTGRES_HOST")
 DATABASE_USER = os.getenv("POSTGRES_USER")
@@ -41,9 +44,29 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 DATABASE_URL = f"postgresql+asyncpg://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}/{DATABASE_NAME}"
 DEBUG = True
+
+# Папка и файл логов
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "app.log"
+
+# Настраиваем root-логгер (твой код)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+
+# Уменьшаем уровень логирования для Telethon и других библиотек
+logging.getLogger("telethon").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.WARNING)
+
 if DEBUG:
-    print(f"DEBUG: {DEBUG}")
-    print(f"DATABASE_URL: {DATABASE_URL}")
+    logging.debug(f"DEBUG: {DEBUG}")
+    logging.debug(f"DATABASE_URL: {DATABASE_URL}")
 
 active_sessions = {}
 
@@ -57,8 +80,8 @@ class SessionRecord(Base):
     id = Column(Integer, primary_key=True)
     username = Column(String, nullable=False)
     session_date = Column(Date, nullable=False)
-    start_time = Column(DateTime, nullable=False)
-    end_time = Column(DateTime, nullable=False)
+    start_time = Column(TIMESTAMP(timezone=True), nullable=False)
+    end_time = Column(TIMESTAMP(timezone=True), nullable=False)
 
 class TrackedUser(Base):
     __tablename__ = "tracked_users"
@@ -132,10 +155,10 @@ async def save_session_record(username: str, start: datetime, end: datetime):
                     session.add(new_record)
                     await session.commit()
                     if DEBUG:
-                        print(f"Запись для {username} успешно сохранена")
+                        logging.debug(f"Запись для {username} успешно сохранена")
     except Exception as e:
-        print(f"Ошибка при сохранении записи для {username}: {e}")
-        traceback.print_exc()
+        logging.error(f"Ошибка при сохранении записи для {username}: {e}")
+        logging.debug(traceback.print_exc())
 
 async def remove_tracked_user(username):
     async with db_lock:
@@ -177,25 +200,26 @@ async def monitor():
                         if username not in active_sessions:
                             active_sessions[username] = now
                             if DEBUG:
-                                print(f"[+] {username} онлайн: сессия начата в {now}")
+                                logging.debug(f"[+] {username} онлайн: сессия начата в {now}")
                     elif isinstance(status, UserStatusOffline):
                         if username in active_sessions:
                    
                             start_time = active_sessions[username]                            
                             await save_session_record(username, start=start_time, end=now)
                             if DEBUG:
-                                print(f"[-] {username} оффлайн: сессия с {start_time} по {now} сохранена")
+                                logging.debug(f"[-] {username} оффлайн: сессия с {start_time} по {now} сохранена")
                             del active_sessions[username]
             
                     if DEBUG:        
-                        print(active_sessions)
+                        # logging.debug(active_sessions)
+                        pass
                 except Exception as e:
-                    print(f"[!!!] Ошибка при проверке {username}: {e}")
-
+                    logging.error(f"[!!!] Ошибка при проверке {username}: {e}")
+            
             if datetime.now(tz=TIMEZONE).strftime("%H:%M") == "23:59":
                 await report_scheduler()
             
-            await asyncio.sleep(30)
+            await asyncio.sleep(3)
         
 async def generate_daily_report():
     async with AsyncSessionLocal() as session:
@@ -264,7 +288,7 @@ async def report_scheduler():
     try:
         reports = await generate_daily_report()
         if DEBUG:
-            print("отправка отчета")
+            logging.debug("отправка отчета")
         
         for report in reports:
             # Extract username from the report text
@@ -281,16 +305,16 @@ async def report_scheduler():
 
                     await bot.send_message(chat_id=int(user.chat_id), text=report, message_thread_id=int(user.topic_id))
                     if DEBUG:
-                        print(f"Отправлен отчет для {username} в чат {user.topic_id}")
+                        logging.debug(f"Отправлен отчет для {username} в чат {user.topic_id}")
                 else:
                     if DEBUG:
-                        print(f"Не удалось найти topic_id для пользователя {username}")
+                        logging.debug(f"Не удалось найти topic_id для пользователя {username}")
             
             await asyncio.sleep(1)
 
     except Exception as e:
-        print(f"Ошибка при создании или отправке отчета: {e}")
-        traceback.print_exc()
+        logging.error(f"Ошибка при создании или отправке отчета: {e}")
+        logging.error(traceback.print_exc())
 
 async def init_db():
     async with engine.begin() as conn:
@@ -311,7 +335,7 @@ async def main():
         for username, start_time in active_sessions.items():
             await save_session_record(username, start=start_time, end=now)
             if DEBUG:
-                print(f"[-] Программа завершается: сессия {username} с {start_time} по {now} сохранена")
+                logging.debug(f"[-] Программа завершается: сессия {username} с {start_time} по {now} сохранена")
 
 if __name__ == "__main__":
     asyncio.run(main())
