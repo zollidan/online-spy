@@ -43,7 +43,7 @@ DATABASE_NAME = os.getenv("POSTGRES_DB")
 CHAT_ID = os.getenv("CHAT_ID")
 
 DATABASE_URL = f"postgresql+asyncpg://{DATABASE_USER}:{DATABASE_PASSWORD}@{DATABASE_HOST}/{DATABASE_NAME}"
-DEBUG = True
+DEBUG = False
 
 # Папка и файл логов
 LOG_DIR = Path("logs")
@@ -219,7 +219,7 @@ async def monitor():
             if datetime.now(tz=TIMEZONE).strftime("%H:%M") == "23:59":
                 await report_scheduler()
             
-            await asyncio.sleep(3)
+            await asyncio.sleep(30)
         
 async def generate_daily_report():
     async with AsyncSessionLocal() as session:
